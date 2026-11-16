@@ -21,7 +21,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.ndimage import binary_erosion
+from scipy.ndimage import binary_dilation, label
 
 
 @dataclass
@@ -51,7 +51,8 @@ class Inverter:
     objects in different channels and gives a color cast.
 
     The rebate, the gate and clipped sprocket holes are left out of
-    the endpoint search, along with a margin around them.
+    the endpoint search, along with a margin around them (see
+    _picture_mask).
     """
 
     class Error(Exception):
@@ -62,6 +63,7 @@ class Inverter:
     GATE_DENSITY = 2.0  # mean density above this is treated as the gate
     CLIP_LEVEL = 0.98
     BASE_CANDIDATE = 0.92  # transmittance above this may be rebate
+    EDGE_MARGIN = 0.025  # margin around rebate and gate, fraction of width
     TILES = 8
 
     def __init__(self, black_percentile: float = 0.3, white_percentile: float = 99.7) -> None:
@@ -104,9 +106,7 @@ class Inverter:
         cells = density[: hb * step, : wb * step].reshape(hb, step, wb, step, 3).mean((1, 3))
         clip_cells = clipped[: hb * step, : wb * step].reshape(hb, step, wb, step).any((1, 3))
         mean = cells.mean(-1)
-        picture = (mean > self.BASE_DENSITY) & (mean < self.GATE_DENSITY) & ~clip_cells
-        margin = max(2, round(0.004 * wb))
-        picture = binary_erosion(picture, iterations=margin, border_value=0)
+        picture = self._picture_mask(mean, clip_cells)
         if picture.sum() < 100:
             raise self.Error("no picture area found in the negative")
         values = cells[picture]
@@ -117,6 +117,29 @@ class Inverter:
         if (white - black <= 0.01).any():
             raise self.Error("the negative has almost no density range")
         return black.astype(np.float64), white.astype(np.float64)
+
+    # ------------------------------------------------------------------
+    def _picture_mask(self, mean: np.ndarray, clipped: np.ndarray) -> np.ndarray:
+        """Return the cells that belong to the picture.
+
+        Rebate (clear base), gate (nearly opaque) and sprocket holes
+        (clipped) all reach the border of the capture. Their edges are
+        soft: an out-of-focus gate, or the edge of the exposed frame,
+        fades through every density on the way to the picture. So areas
+        connected to the border get a wide margin. Areas inside the
+        picture are different: clear base there is a shadow that recorded
+        nothing, and belongs to the picture; specks that are opaque or
+        clipped are dust or pinholes and get only a small margin.
+        """
+        hb, wb = mean.shape
+        odd = (mean <= self.BASE_DENSITY) | (mean >= self.GATE_DENSITY) | clipped
+        labels, _ = label(odd)
+        border = np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]])
+        edge = np.isin(labels, np.unique(border[border > 0]))
+        specks = odd & ~edge & ((mean >= self.GATE_DENSITY) | clipped)
+        margin = max(2, round(self.EDGE_MARGIN * wb))
+        bad = binary_dilation(edge, iterations=margin) | binary_dilation(specks, iterations=2)
+        return ~bad
 
     # ------------------------------------------------------------------
     def _base_match(

@@ -58,6 +58,38 @@ class TestInverter:
         assert (result.black > 0.03).all()
         assert (result.white < 1.5).all()
 
+    def test_soft_edges_do_not_set_endpoints(self, synthetic, flat):
+        # An out-of-focus gate and the edge of the exposed frame fade over
+        # several pixels. The fade passes through every density between
+        # the gate (or clear base) and the picture; none of it is picture.
+        # The fade is even in density, as with a real out-of-focus gate
+        # (about 1.6% of the frame width on the GX85 captures).
+        neg = synthetic.negative.copy()
+        ramp = 6
+        d_gate = -np.log10(0.002 / flat[:, 8])
+        d_in = -np.log10(neg[:, 8 + ramp] / flat[:, 8 + ramp])
+        d_reb = -np.log10(neg[23, 8:] / flat[23, 8:])
+        d_pic = -np.log10(neg[24 + ramp, 8:] / flat[24 + ramp, 8:])
+        for i in range(ramp):
+            a = (i + 1) / (ramp + 1)
+            # left gate edge: columns just inside the gate fade in
+            neg[:, 8 + i] = flat[:, 8 + i] * 10 ** -(d_gate * (1 - a) + d_in * a)
+            # bottom of the rebate strip: picture fades to clear base
+            neg[24 + i, 8:] = flat[24 + i, 8:] * 10 ** -(d_reb * (1 - a) + d_pic * a)
+        result = Inverter().invert(neg, flat)
+        assert result.black == pytest.approx([0.05, 0.05, 0.05], abs=0.01)
+        assert result.white == pytest.approx(0.05 + synthetic.contrast, abs=0.01)
+
+    def test_deep_shadows_at_base_are_kept(self, synthetic, flat):
+        # A picture whose shadows recorded nothing above base: the black
+        # point should be base, not something lighter chosen because the
+        # shadows were mistaken for rebate.
+        neg = synthetic.negative.copy()
+        patch = (slice(140, 180), slice(200, 260))
+        neg[patch] = synthetic.blank[patch] * 0.999
+        result = Inverter().invert(neg, flat)
+        assert (result.black < 0.02).all()
+
     def test_output_range(self, synthetic, flat):
         result = Inverter().invert(synthetic.negative, flat)
         assert result.positive.dtype == np.float32
