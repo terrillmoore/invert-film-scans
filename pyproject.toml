@@ -60,6 +60,7 @@ packages = ["src/invert_film_scans"]
 
 [dependency-groups]
 dev = [
+    "pillow>=13.0, ==13.*",
     "pytest>=9.0, ==9.*",
     "ruff>=0.17, ==0.17.*",
 ]
