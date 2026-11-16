@@ -44,6 +44,6 @@ class TestRealFiles:
         # the picture uses most of the output range
         assert data.min() < 2000 and data.max() > 63000
         line = capsys.readouterr().out
-        m = re.search(r"rebate spread ([0-9.]+) stop", line)
+        m = re.search(r"rebate varies ([0-9.]+) stop", line)
         if m:
-            assert float(m.group(1)) < App.SPREAD_WARNING
+            assert float(m.group(1)) < App.VARIATION_WARNING

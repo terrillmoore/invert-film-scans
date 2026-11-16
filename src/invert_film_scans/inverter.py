@@ -32,7 +32,7 @@ class Inversion:
     black: np.ndarray  # density above base mapped to black, per channel
     white: np.ndarray  # density above base mapped to white, per channel
     base_ratio: np.ndarray | None  # rebate level / blank-frame level, per channel
-    base_spread_stops: float | None  # unevenness of the rebate after flat-fielding
+    rebate_variation_stops: float | None  # worst variation along one edge's rebate
 
 
 class Inverter:
@@ -83,7 +83,7 @@ class Inverter:
         """
         clipped = (negative >= self.CLIP_LEVEL).any(-1)
         density = np.divide(negative, flat, dtype=np.float32)
-        base_ratio, spread = self._base_match(density, clipped)
+        base_ratio, variation = self._base_match(density, clipped)
         np.clip(density, 1e-4, None, out=density)
         np.log10(density, out=density)
         np.negative(density, out=density)
@@ -94,7 +94,7 @@ class Inverter:
         positive -= black.astype(np.float32)
         positive /= (white - black).astype(np.float32)
         np.clip(positive, 0.0, 1.0, out=positive)
-        return Inversion(positive, black, white, base_ratio, spread)
+        return Inversion(positive, black, white, base_ratio, variation)
 
     # ------------------------------------------------------------------
     def _endpoints(
@@ -152,11 +152,12 @@ class Inverter:
         same; a spread means the blank's falloff doesn't fit this frame.
         """
         h, w, _ = transmittance.shape
-        th, tw = h // self.TILES, w // self.TILES
+        n = self.TILES
+        th, tw = h // n, w // n
         need = max(20, int(0.01 * th * tw))
-        tile_values = []
-        for ty in range(self.TILES):
-            for tx in range(self.TILES):
+        tiles: dict[tuple[int, int], np.ndarray] = {}
+        for ty in range(n):
+            for tx in range(n):
                 sl = (slice(ty * th, (ty + 1) * th), slice(tx * tw, (tx + 1) * tw))
                 t = transmittance[sl]
                 ok = ~clipped[sl] & (t.min(-1) > self.BASE_CANDIDATE)
@@ -165,9 +166,27 @@ class Inverter:
                 v = t[ok]
                 g = v[:, 1]
                 top = g >= np.percentile(g, 50)
-                tile_values.append(np.median(v[top], 0))
-        if not tile_values:
+                tiles[(ty, tx)] = np.median(v[top], 0)
+        if not tiles:
             return None, None
-        tv = np.array(tile_values)
-        spread = float(np.log2(tv[:, 1].max() / tv[:, 1].min()))
-        return np.median(tv, 0), spread
+        base_ratio = np.median(np.array(list(tiles.values())), 0)
+
+        # Rebate runs along the edges of the frame. Strips along different
+        # edges can differ by a fixed amount (the gap between frames, the
+        # strip beside the holes), and the film moves in the holder, so only
+        # variation along one strip says the blank's falloff doesn't fit.
+        # Corner tiles can hold two strips, so they count for neither.
+        inner = range(1, n - 1)
+        edges = [
+            [(0, i) for i in inner],
+            [(n - 1, i) for i in inner],
+            [(i, 0) for i in inner],
+            [(i, n - 1) for i in inner],
+        ]
+        variation = None
+        for edge in edges:
+            g = [tiles[k][1] for k in edge if k in tiles]
+            if len(g) >= 3:
+                v = float(np.log2(max(g) / min(g)))
+                variation = v if variation is None else max(variation, v)
+        return base_ratio, variation

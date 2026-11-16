@@ -26,11 +26,15 @@ import numpy as np
 from .__version__ import __version__
 from .exiftool import ExifTool
 from .flatfield import FlatField
+from .grouping import FrameGrouper
 from .icc import IccProfile
 from .inverter import Inverter
 from .rawloader import RawLoader
 from .readme import ReadmeReader
+from .stack import FrameStack
 from .tiffwriter import TiffWriter
+
+Job = tuple[list[pathlib.Path], pathlib.Path]  # frames to average, output path
 
 
 class App:
@@ -41,7 +45,7 @@ class App:
 
     PROGNAME = "invert-film-scans"
     CLIP_WARNING = 0.95  # warn if the blank's film area reaches this level
-    SPREAD_WARNING = 0.05  # warn if the rebate varies more than this (stops)
+    VARIATION_WARNING = 0.05  # warn if rebate varies more than this along an edge (stops)
 
     def __init__(self, argv: Sequence[str] | None = None, *, _testing: bool = False) -> None:
         """Parse the command line.
@@ -107,6 +111,14 @@ class App:
             metavar="P",
             help="areas above percentile P set white (default: 99.7)",
         )
+        p.add_argument(
+            "--group-gap",
+            type=float,
+            default=3.0,
+            metavar="SECONDS",
+            help="average captures taken within this many seconds of each other "
+            "(default: 3; 0 turns averaging off)",
+        )
         p.add_argument("-v", "--verbose", action="count", default=0, help="more detail")
         p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
         p.add_argument(
@@ -141,20 +153,32 @@ class App:
         except Inverter.Error as e:
             raise self.Error(f"bad percentile settings: {e}") from e
 
+        try:
+            grouper = FrameGrouper(a.group_gap)
+        except FrameGrouper.Error as e:
+            raise self.Error(str(e)) from e
+
         for path in [a.blank, *a.negatives]:
             if not path.is_file():
                 raise self.Error(f"{path}: file not found")
         exiftool = ExifTool()
+        if a.group_gap > 0:
+            try:
+                exiftool.check()
+            except ExifTool.Error as e:
+                raise self.Error(
+                    f"{e}; it reads capture times for averaging; or use --group-gap 0"
+                ) from e
         if not a.skip_metadata and not a.dry_run:
             try:
                 exiftool.check()
             except ExifTool.Error as e:
                 raise self.Error(f"{e}; or use --skip-metadata") from e
 
-        jobs = self._plan()
+        jobs = self._plan(grouper, exiftool)
         if a.dry_run:
-            for src, dst in jobs:
-                print(f"{src} -> {dst}")
+            for frames, dst in jobs:
+                print(f"{', '.join(f.name for f in frames)} -> {dst}")
             return 0
 
         loader = RawLoader()
@@ -166,11 +190,11 @@ class App:
 
         writer = TiffWriter(IccProfile.adobe_rgb_compatible().to_bytes())
         status = 0
-        for src, dst in jobs:
+        for frames, dst in jobs:
             try:
-                self._process(src, dst, loader, flat, inverter, writer, exiftool)
+                self._process_group(frames, dst, loader, flat, inverter, writer, exiftool)
             except (RawLoader.Error, Inverter.Error, ExifTool.Error, OSError) as e:
-                self.log.error("%s: %s", src, e)
+                self.log.error("%s: %s", frames[0], e)
                 status = 1
         return status
 
@@ -186,20 +210,36 @@ class App:
     # ------------------------------------------------------------------
     # steps
     # ------------------------------------------------------------------
-    def _plan(self) -> list[tuple[pathlib.Path, pathlib.Path]]:
+    def _output_path(self, src: pathlib.Path) -> pathlib.Path:
+        a = self.args
+        out_dir = a.output_dir if a.output_dir is not None else src.parent
+        return out_dir / f"{src.stem}{a.suffix}.tif"
+
+    def _plan(self, grouper: FrameGrouper, exiftool: ExifTool) -> list[Job]:
         a = self.args
         blank = a.blank.resolve()
-        jobs = []
+        negatives = []
         for src in a.negatives:
             if src.resolve() == blank:
                 self.log.info("%s: the blank frame; skipped", src)
-                continue
-            out_dir = a.output_dir if a.output_dir is not None else src.parent
-            dst = out_dir / f"{src.stem}{a.suffix}.tif"
+            elif src not in negatives:
+                negatives.append(src)
+        if a.group_gap > 0:
+            times = exiftool.capture_times(negatives)
+            for src, t in times.items():
+                if t is None:
+                    self.log.warning("%s: no capture time; not averaged with others", src)
+            groups = grouper.group((src, times[src]) for src in negatives)
+        else:
+            groups = [[src] for src in negatives]
+
+        jobs = []
+        for frames in groups:
+            dst = self._output_path(frames[0])
             if dst.exists() and not a.overwrite:
                 self.log.warning("%s: exists; skipped (use --overwrite to replace)", dst)
                 continue
-            jobs.append((src, dst))
+            jobs.append((frames, dst))
         return jobs
 
     def _check_blank(self, flat: FlatField) -> None:
@@ -217,9 +257,9 @@ class App:
                 *peak,
             )
 
-    def _process(
+    def _process_group(
         self,
-        src: pathlib.Path,
+        frames: list[pathlib.Path],
         dst: pathlib.Path,
         loader: RawLoader,
         flat_field: FlatField,
@@ -227,30 +267,67 @@ class App:
         writer: TiffWriter,
         exiftool: ExifTool,
     ) -> None:
-        negative = loader.load(src)
+        """Average a group of captures and invert it.
+
+        A frame that doesn't line up with the first one of its stack (the
+        film moved, or it is another picture) starts a new stack, which is
+        written separately under its own name.
+        """
+        stack = FrameStack(loader.load(frames[0]))
+        members = [frames[0]]
+        for src in frames[1:]:
+            img = loader.load(src)
+            if stack.add(img):
+                members.append(src)
+                continue
+            self.log.warning("%s: %s; written separately", src, stack.last_reason)
+            self._finish(stack, members, dst, flat_field, inverter, writer, exiftool)
+            dst = self._output_path(src)
+            if dst.exists() and not self.args.overwrite:
+                self.log.warning("%s: exists; skipped (use --overwrite to replace)", dst)
+            stack = FrameStack(img)
+            members = [src]
+        self._finish(stack, members, dst, flat_field, inverter, writer, exiftool)
+
+    def _finish(
+        self,
+        stack: FrameStack,
+        members: list[pathlib.Path],
+        dst: pathlib.Path,
+        flat_field: FlatField,
+        inverter: Inverter,
+        writer: TiffWriter,
+        exiftool: ExifTool,
+    ) -> None:
+        if dst.exists() and not self.args.overwrite:
+            return
+        negative = stack.mean()
+        del stack
         flat = flat_field.evaluate(negative.shape[:2])
         result = inverter.invert(negative, flat)
         del negative, flat
         dst.parent.mkdir(parents=True, exist_ok=True)
         writer.write(dst, result.positive)
+        src = members[0]
         if not self.args.skip_metadata:
             exiftool.copy_metadata(src, dst)
 
+        name = src.name if len(members) == 1 else f"{src.name} ({len(members)} frames)"
         line = (
-            f"{src.name} -> {dst}: black {self._fmt(result.black)}, "
+            f"{name} -> {dst}: black {self._fmt(result.black)}, "
             f"white {self._fmt(result.white)}"
         )
-        if result.base_ratio is not None and result.base_spread_stops is not None:
+        if result.base_ratio is not None and result.rebate_variation_stops is not None:
             line += (
                 f", base {self._fmt(result.base_ratio)}, "
-                f"rebate spread {result.base_spread_stops:.3f} stop"
+                f"rebate varies {result.rebate_variation_stops:.3f} stop along an edge"
             )
-            if result.base_spread_stops > self.SPREAD_WARNING:
+            if result.rebate_variation_stops > self.VARIATION_WARNING:
                 self.log.warning(
-                    "%s: rebate varies %.2f stop after correction; "
+                    "%s: rebate varies %.2f stop along an edge after correction; "
                     "the blank frame may not fit this frame's setup",
                     src,
-                    result.base_spread_stops,
+                    result.rebate_variation_stops,
                 )
         else:
             line += ", no clear rebate found"

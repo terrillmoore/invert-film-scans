@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import pathlib
 
@@ -42,6 +43,7 @@ class TestOptions:
         assert a.white_percentile == 99.7
         assert a.verbose == 0
         assert a.readme_section is None
+        assert a.group_gap == 3.0
         for name in BOOLEANS:
             assert getattr(a, name) is False
 
@@ -121,8 +123,28 @@ def captures(monkeypatch, synthetic, tmp_path):
     for name in files:
         (tmp_path / name).write_bytes(b"raw")
     cap = _Captures(files)
+    cap.times = {}  # name -> capture time; missing names have none
     monkeypatch.setattr(RawLoader, "load", lambda self, p: cap.load(p))
+    monkeypatch.setattr(ExifTool, "check", lambda self: "exiftool")
+    monkeypatch.setattr(
+        ExifTool,
+        "capture_times",
+        lambda self, paths: {p: cap.times.get(pathlib.Path(p).name) for p in paths},
+    )
     return cap
+
+
+def _burst(captures, synthetic, tmp_path, frames, start=0.0, step=1.2):
+    """Add noisy repeat captures of the synthetic negative, `step` s apart."""
+    rng = np.random.default_rng(7)
+    for i, (name, img) in enumerate(frames):
+        base = synthetic.negative if img is None else img
+        noisy = base * (1 + 0.01 * rng.standard_normal(base.shape)).astype(np.float32)
+        captures.files[name] = np.clip(noisy, 0, 1).astype(np.float32)
+        captures.times[name] = dt.datetime(2026, 11, 16, 11, 5) + dt.timedelta(
+            seconds=start + i * step
+        )
+        (tmp_path / name).write_bytes(b"raw")
 
 
 def _run(tmp_path, *extra: str) -> int:
@@ -200,6 +222,59 @@ class TestRun:
         rc = App(["-b", str(tmp_path / "blank.RW2"), str(tmp_path / "neg1.RW2")]).run()
         assert rc == 0
         assert calls == [(tmp_path / "neg1.RW2", tmp_path / "neg1_inv.tif")]
+
+    def test_averages_a_burst(self, tmp_path, captures, synthetic, capsys):
+        names = [f"b{i}.RW2" for i in range(4)]
+        _burst(captures, synthetic, tmp_path, [(n, None) for n in names])
+        assert _run(tmp_path, *[str(tmp_path / n) for n in names]) == 0
+        assert (tmp_path / "b0_inv.tif").is_file()
+        assert not (tmp_path / "b1_inv.tif").exists()
+        assert "4 frames" in capsys.readouterr().out
+
+    def test_separate_bursts(self, tmp_path, captures, synthetic):
+        _burst(captures, synthetic, tmp_path, [("a0.RW2", None), ("a1.RW2", None)])
+        _burst(captures, synthetic, tmp_path, [("c0.RW2", None), ("c1.RW2", None)], start=60)
+        names = ["a0.RW2", "a1.RW2", "c0.RW2", "c1.RW2"]
+        assert _run(tmp_path, *[str(tmp_path / n) for n in names]) == 0
+        assert (tmp_path / "a0_inv.tif").is_file()
+        assert (tmp_path / "c0_inv.tif").is_file()
+        assert not (tmp_path / "a1_inv.tif").exists()
+
+    def test_group_gap_zero_keeps_frames_apart(self, tmp_path, captures, synthetic):
+        names = [f"b{i}.RW2" for i in range(3)]
+        _burst(captures, synthetic, tmp_path, [(n, None) for n in names])
+        args = ["--group-gap", "0", *[str(tmp_path / n) for n in names]]
+        assert _run(tmp_path, *args) == 0
+        for i in range(3):
+            assert (tmp_path / f"b{i}_inv.tif").is_file()
+
+    def test_moved_frame_starts_new_output(self, tmp_path, captures, synthetic, caplog):
+        moved = np.roll(synthetic.negative, 3, axis=0)
+        frames = [("m0.RW2", None), ("m1.RW2", None), ("m2.RW2", moved), ("m3.RW2", moved)]
+        _burst(captures, synthetic, tmp_path, frames)
+        assert _run(tmp_path, *[str(tmp_path / n) for n, _ in frames]) == 0
+        assert (tmp_path / "m0_inv.tif").is_file()
+        assert (tmp_path / "m2_inv.tif").is_file()
+        assert not (tmp_path / "m1_inv.tif").exists()
+        assert not (tmp_path / "m3_inv.tif").exists()
+        assert "moved" in caplog.text
+
+    def test_dry_run_shows_groups(self, tmp_path, captures, synthetic, capsys):
+        names = [f"b{i}.RW2" for i in range(3)]
+        _burst(captures, synthetic, tmp_path, [(n, None) for n in names])
+        assert _run(tmp_path, "--dry-run", *[str(tmp_path / n) for n in names]) == 0
+        out = capsys.readouterr().out
+        assert "b0.RW2, b1.RW2, b2.RW2 ->" in out
+        assert "b0_inv.tif" in out
+
+    def test_grouping_needs_exiftool(self, tmp_path, captures, monkeypatch):
+        def missing(self):
+            raise ExifTool.Error("exiftool: not found")
+
+        monkeypatch.setattr(ExifTool, "check", missing)
+        with pytest.raises(App.Error, match="--group-gap 0"):
+            _run(tmp_path, str(tmp_path / "neg1.RW2"))
+        assert _run(tmp_path, "--group-gap", "0", str(tmp_path / "neg1.RW2")) == 0
 
     def test_checks_exiftool_before_work(self, tmp_path, captures, monkeypatch):
         def missing(self):

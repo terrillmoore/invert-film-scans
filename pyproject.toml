@@ -19,7 +19,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "invert-film-scans"
-version = "0.1.0"
+version = "0.2.0"
 description = "Invert color negatives digitized with a digital camera"
 readme = "README.md"
 requires-python = ">=3.13"

@@ -40,7 +40,8 @@ pytest, in `tests/`. Write tests first (red/green).
   real setup: off-center per-channel falloff, a gate on two sides, clipped
   sprocket holes, a clear rebate strip, and a negative made from a known
   scene with different contrast in each dye layer.
-- **test_icc.py**, **test_flatfield.py**, **test_inverter.py**: the units.
+- **test_icc.py**, **test_flatfield.py**, **test_inverter.py**,
+  **test_grouping.py**: the units.
 - **test_io.py**: RawLoader (with a stand-in for rawpy), TiffWriter, and
   ExifTool (skipped without exiftool).
 - **test_app.py**, **test_main.py**: options and end-to-end runs, with
@@ -66,12 +67,18 @@ Source modules in `src/invert_film_scans/`:
   channel of the blank frame, in normalized coordinates; evaluated
   separably.
 - **inverter.py**: `Inverter`. Density above base, the picture mask,
-  same-pixel endpoints, rescaling, and the rebate check.
+  same-pixel endpoints, rescaling, and the rebate check (variation along each
+  edge's strip; steps between strips are the film, not a misfit).
+- **grouping.py**: `FrameGrouper`. Groups repeated captures of one negative by
+  capture time (`--group-gap`).
+- **stack.py**: `FrameStack`. Checks each capture against the first of its
+  group (phase correlation plus upsampled cross-power, after Guizar-Sicairos
+  et al.) and averages the ones that line up.
 - **icc.py**: `IccProfile`. Builds an Adobe RGB (1998) compatible matrix/TRC
   profile, so we don't ship Adobe's file.
 - **tiffwriter.py**: `TiffWriter`. 16-bit deflate TIFF with the profile.
 - **exiftool.py**: `ExifTool`. Copies all tags from the raw file except the
-  ICC profile.
+  ICC profile; reads capture times (with sub-seconds) for grouping.
 - **readme.py**: `ReadmeReader`. Prints the README or a marked section; the
   wheel bundles README.md under `resources/`.
 

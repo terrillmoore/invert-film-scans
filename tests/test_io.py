@@ -140,6 +140,30 @@ class TestExifTool:
             assert bytes(t.pages[0].tags[34675].value) == icc
 
     @needs_exiftool
+    def test_reads_capture_times(self, tmp_path):
+        import datetime as dt
+
+        a = tmp_path / "a.tif"
+        b = tmp_path / "b.tif"
+        c = tmp_path / "c.tif"
+        for p in (a, b, c):
+            tifffile.imwrite(p, np.zeros((2, 2, 3), np.uint16), photometric="rgb")
+        subprocess.run(
+            ["exiftool", "-q", "-overwrite_original",
+             "-DateTimeOriginal=2026:11:16 11:05:16", "-SubSecTimeOriginal=240", str(a)],
+            check=True,
+        )  # fmt: skip
+        subprocess.run(
+            ["exiftool", "-q", "-overwrite_original",
+             "-DateTimeOriginal=2026:11:16 11:05:17", str(b)],
+            check=True,
+        )  # fmt: skip
+        times = ExifTool().capture_times([a, b, c])
+        assert times[a] == dt.datetime(2026, 11, 16, 11, 5, 16, 240000)
+        assert times[b] == dt.datetime(2026, 11, 16, 11, 5, 17)
+        assert times[c] is None
+
+    @needs_exiftool
     def test_reports_failure(self, tmp_path):
         with pytest.raises(ExifTool.Error):
             ExifTool().copy_metadata(tmp_path / "nope.RW2", tmp_path / "nope.tif")

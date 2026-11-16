@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import datetime
+import json
 import pathlib
 import shutil
 import subprocess
@@ -41,6 +43,44 @@ class ExifTool:
         if path is None:
             raise self.Error(f"{self.program}: not found on PATH (install exiftool)")
         return path
+
+    def capture_times(
+        self, paths: list[pathlib.Path]
+    ) -> dict[pathlib.Path, datetime.datetime | None]:
+        """Return each file's capture time (with sub-seconds), or None.
+
+        One exiftool run for all files. Files that exiftool can't read,
+        or that carry no DateTimeOriginal, map to None.
+        """
+        program = self.check()
+        out: dict[pathlib.Path, datetime.datetime | None] = dict.fromkeys(paths)
+        if not paths:
+            return out
+        result = subprocess.run(
+            [program, "-j", "-q", "-q", "-DateTimeOriginal", "-SubSecTimeOriginal",
+             *[str(p) for p in paths]],
+            capture_output=True,
+            text=True,
+        )  # fmt: skip
+        try:
+            records = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError as e:
+            raise self.Error(f"can't read exiftool output: {e}") from e
+        by_name = {str(p): p for p in paths}
+        for rec in records:
+            path = by_name.get(rec.get("SourceFile", ""))
+            stamp = rec.get("DateTimeOriginal")
+            if path is None or not isinstance(stamp, str):
+                continue
+            try:
+                t = datetime.datetime.strptime(stamp.strip(), "%Y:%m:%d %H:%M:%S")
+            except ValueError:
+                continue
+            sub = str(rec.get("SubSecTimeOriginal", "")).strip()
+            if sub.isdigit():
+                t += datetime.timedelta(seconds=int(sub) / 10 ** len(sub))
+            out[path] = t
+        return out
 
     def copy_metadata(self, source: pathlib.Path, dest: pathlib.Path) -> None:
         """Copy all tags from source to dest, keeping dest's ICC profile."""

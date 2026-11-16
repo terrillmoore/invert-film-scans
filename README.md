@@ -60,11 +60,19 @@ uv run invert-film-scans --help
 - Expose so that clear film base stays well below clipping in every channel.
   The program warns if the blank frame comes within 5% of clipping. Sprocket
   holes clip; that's expected and harmless.
-- Shoot one or two frames of blank film from the same roll (leader, or an
-  unexposed frame), with the film in the holder, at the same shutter speed as
-  the negatives. Don't move the holder between the blank and the negatives if
-  you can help it. A blank shot later works if the holder sits close to where
-  it was; the program checks this for each frame.
+- Shoot one frame of blank film from the same roll (leader, or an unexposed
+  frame), with the film in the holder, at the same exposure as the negatives.
+  It can be shot before or after the negatives. The film's position in the
+  holder doesn't matter: the blank supplies the falloff of the lens and light
+  and the color of the base, and the base is even across the film. Shoot a new
+  blank if you change the lens, extension, aperture, focus or light.
+- Take several captures of each negative, a second or two apart, without
+  touching the film: a burst, or repeated presses from the phone app. The
+  program averages them, which cuts sensor noise by the square root of the
+  number of captures. Four halve it. This matters most in the dense parts of
+  the negative (skies and highlights), where few photons reach the sensor.
+  Advance the film between negatives; that takes longer than the averaging
+  gap, so the captures of different negatives stay apart.
 - Frame the whole negative with a little rebate around it. On Micro Four
   Thirds that is a magnification of about 0.44 (a 39 x 29.5 mm field).
 <!-- invert-film-scans:capture:end -->
@@ -76,9 +84,11 @@ uv run invert-film-scans --help
 invert-film-scans [options] --blank BLANK.RW2 NEGATIVE.RW2 ...
 ```
 
-For each negative, writes `NAME_inv.tif` (16-bit, with an Adobe RGB (1998)
-compatible profile, deflate compressed) next to the raw file, or in
-`--output-dir`, and copies the raw file's metadata into it.
+Captures taken within a few seconds of each other are treated as repeats of
+one negative and averaged. For each negative, the program writes
+`NAME_inv.tif`, named after its first capture (16-bit, with an Adobe RGB
+(1998) compatible profile, deflate compressed), next to the raw files or in
+`--output-dir`, and copies the first capture's metadata into it.
 
 Options:
 
@@ -96,6 +106,9 @@ Options:
   density, sets black. Default: 0.3.
 - `--white-percentile P`: the areas above percentile P set white. Default:
   99.7.
+- `--group-gap SECONDS`: captures taken within this many seconds of the
+  previous one are averaged. Default: 3. `0` turns averaging off. Reading the
+  capture times needs exiftool.
 - `-v`, `--verbose`: more detail; repeat for more.
 - `--version`: print the version and exit.
 - `--readme`: print this README and exit.
@@ -111,24 +124,33 @@ Example:
 invert-film-scans -b _1010753.RW2 -o inverted _1010752.RW2 _1010754.RW2
 ```
 
-The blank frame is skipped if it also appears in the list of negatives.
+The blank frame is skipped if it also appears in the list of negatives, so
+`invert-film-scans -b _1010756.RW2 *.RW2` works.
+
+Before a capture is added to an average, the program checks that it lines up
+with the first capture of its group. If the film moved more than half a pixel,
+or the capture shows a different picture, it starts a new output of its own
+and the program says so.
 <!-- invert-film-scans:usage:end -->
 
 ## What the messages mean
 
 <!-- invert-film-scans:messages:start -->
-For each frame the program prints the output name, the black and white points
-(density above base, red, green, blue), and two checks of the blank frame
-against the negative's rebate:
+For each negative the program prints the output name, how many captures were
+averaged, the black and white points (density above base, red, green, blue),
+and two checks of the blank frame against the negative's rebate:
 
 - **base**: rebate level divided by the blank frame's level, per channel. Near
   1.00 when the blank was shot in the same session at the same shutter speed.
   A different session or shutter shows up here as a few percent; that doesn't
   affect the result.
-- **rebate spread**: how much the rebate still varies across the frame after
-  the falloff correction, in stops. Above 0.05 stop the program warns: the
-  blank doesn't fit this frame, usually because the holder or lens moved.
-  Shoot a new blank.
+- **rebate varies**: how much the rebate still varies along one edge of the
+  frame after the falloff correction, in stops, for the worst edge. Strips
+  along different edges can differ by a fixed amount (the gap between frames,
+  the strip beside the holes); that is the film, so only variation along a
+  strip counts. Above 0.05 stop the program warns: the blank's falloff doesn't
+  fit this frame, usually because the lens, extension or light changed. Shoot
+  a new blank.
 
 If a frame has no clear rebate, these checks are skipped.
 
@@ -142,7 +164,8 @@ of clipping in any channel.
 1. Each raw file is decoded to linear camera RGB, with no color matrix, white
    balance or tone curve. Densities must come from the sensor's own channels;
    a color matrix mixes the channels before the log and distorts hues after
-   inversion.
+   inversion. Repeated captures of one negative are checked for movement
+   (phase correlation, refined to about 0.05 pixel) and averaged.
 2. A smooth surface (a degree-6 polynomial in the log of each channel) is
    fitted to the blank frame, leaving out the gate, sprocket holes and a margin
    around them.
@@ -170,7 +193,8 @@ Terry Moore
 
 ### Status
 
-2026-11-16: First version. Tested on Panasonic GX85 captures of 35 mm C-41
+2026-11-16: Version 0.2. Averages repeated captures; the rebate check looks
+at variation along each edge. Tested on Panasonic GX85 captures of 35 mm C-41
 film.
 
 ### License

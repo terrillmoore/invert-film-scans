@@ -99,20 +99,33 @@ class TestInverter:
     def test_base_match_with_matching_blank(self, synthetic, flat):
         result = Inverter().invert(synthetic.negative, flat)
         assert result.base_ratio == pytest.approx([1, 1, 1], abs=0.02)
-        assert result.base_spread_stops < 0.03
+        assert result.rebate_variation_stops < 0.03
 
     def test_base_match_detects_wrong_flat(self, synthetic, flat):
         h, w = flat.shape[:2]
         tilt = np.linspace(0.85, 1.15, w)[None, :, None].astype(np.float32)
         result = Inverter().invert(synthetic.negative, flat * tilt)
-        assert result.base_spread_stops > 0.2
+        assert result.rebate_variation_stops > 0.2
+
+    def test_step_between_rebate_strips_is_not_a_misfit(self, synthetic, flat):
+        # Strips of rebate along different edges can differ by a fixed
+        # amount (the gap between frames, the strip beside the holes).
+        # That is the film, not the blank: only variation along a strip
+        # counts.
+        neg = synthetic.negative.copy()
+        right = np.zeros(neg.shape[:2], bool)
+        right[30:-14, -12:] = True
+        clear = synthetic.base * synthetic.falloff[right] * 2 ** 0.06
+        neg[right] = clear.astype(np.float32)
+        result = Inverter().invert(neg, flat)
+        assert result.rebate_variation_stops < 0.03
 
     def test_base_match_absent_without_rebate(self, synthetic, flat):
         neg = synthetic.negative.copy()
         neg[synthetic.rebate] *= 0.5  # no clear base anywhere now
         result = Inverter().invert(neg, flat)
         assert result.base_ratio is None
-        assert result.base_spread_stops is None
+        assert result.rebate_variation_stops is None
 
     def test_percentiles_are_configurable(self, synthetic, flat):
         loose = Inverter(black_percentile=5, white_percentile=95).invert(synthetic.negative, flat)
