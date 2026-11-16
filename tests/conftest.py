@@ -29,6 +29,7 @@ class Synthetic:
     base: np.ndarray  # transmittance-weighted level of clear base, per channel
     gate: np.ndarray  # True where the holder's gate blocks the light
     holes: np.ndarray  # True at sprocket holes
+    rebate: np.ndarray  # True on the clear rebate strip of the negative
     blank: np.ndarray  # capture of blank (unexposed, processed) film
     scene: np.ndarray  # scene luminance pattern, 0..1, used for the negative
     negative: np.ndarray  # capture of an exposed frame
@@ -78,9 +79,12 @@ class SyntheticFactory:
         scene[140:180, 200:260] = 0.0
         contrast = np.array([0.45, 0.65, 0.85])  # density range per channel
         density = 0.05 + scene[..., None] * contrast  # density above base
+        rebate = np.zeros((h, w), bool)
+        rebate[14:24, 8:] = True
+        density[rebate] = 0.0
         negative = capture(base * 10.0 ** (-density))
 
-        return Synthetic(falloff, base, gate, holes, blank, scene, negative, contrast)
+        return Synthetic(falloff, base, gate, holes, rebate, blank, scene, negative, contrast)
 
 
 @pytest.fixture
