@@ -1,0 +1,9 @@
+dist
+*.egg-info
+.env
+.DS_Store
+.vscode
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
