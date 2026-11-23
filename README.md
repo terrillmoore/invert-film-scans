@@ -52,12 +52,18 @@ uv run invert-film-scans --help
 ## Capturing the negatives
 
 <!-- invert-film-scans:capture:start -->
+General rules:
+
 - Use one setup for the roll: same lens, extension, aperture, focus, holder
   position and light. Changing any of them changes the falloff.
 - Use the electronic shutter. On the GX85, the mechanical shutter adds an
   uneven exposure of 1 to 2% across the frame at short speeds. A DC-powered
   light source doesn't flicker, so the electronic shutter is safe with it.
-- Expose so that clear film base stays well below clipping in every channel.
+- Expose as much as the film base allows: about 90% of full scale in the
+  brightest channel of the raw data. Every part of the picture is denser than
+  the base, so nothing in it clips if the base doesn't, and more light means
+  less sensor noise. The camera's histogram is drawn from its JPEG, after a
+  tone curve, and is a poor guide; check a raw frame of clear film instead.
   The program warns if the blank frame comes within 5% of clipping. Sprocket
   holes clip; that's expected and harmless.
 - Shoot one frame of blank film from the same roll (leader, or an unexposed
@@ -67,14 +73,46 @@ uv run invert-film-scans --help
   and the color of the base, and the base is even across the film. Shoot a new
   blank if you change the lens, extension, aperture, focus or light.
 - Take several captures of each negative, a second or two apart, without
-  touching the film: a burst, or repeated presses from the phone app. The
-  program averages them, which cuts sensor noise by the square root of the
-  number of captures. Four halve it. This matters most in the dense parts of
-  the negative (skies and highlights), where few photons reach the sensor.
-  Advance the film between negatives; that takes longer than the averaging
-  gap, so the captures of different negatives stay apart.
+  touching the camera or film: a burst, or repeated presses from the phone
+  app. The program averages them, which cuts sensor noise by the square root
+  of the number of captures. Eight cut it to about a third. This matters most
+  in the dense parts of the negative (skies and highlights), where few
+  photons reach the sensor. Advance the film between negatives; that takes
+  longer than the averaging gap, so the captures of different negatives stay
+  apart.
 - Frame the whole negative with a little rebate around it. On Micro Four
   Thirds that is a magnification of about 0.44 (a 39 x 29.5 mm field).
+- Stop down more than you'd expect. Below 1:1 the film sees a smaller
+  aperture than the f-number (f/11 at 0.44 is about f/36 as seen from the
+  film), but a holder that doesn't hold the film flat needs the depth of
+  field. Measure before deciding; see below.
+
+The setup these rules came from, tested in November 2026: Panasonic GX85
+(16 MP, no low-pass filter), Canon FL 50 mm f/3.5 Macro, 100 mm of Valoi
+extension tubes (magnification 0.439), Valoi easy35 holder, battery-powered
+DC light.
+
+- Aperture: f/11. Fine detail measured 30 to 50% higher than at f/8, and
+  higher still compared with f/3.5. The holder rocks about 0.75 mm in its
+  seat and its film path bows the frame, so depth of field matters more than
+  diffraction. Between f/3.5 and about f/5 the light doesn't change with the
+  aperture (the light source's cone, not the iris, limits it); from f/5.6 down
+  the iris takes over.
+- Holder: a shim of about 0.75 mm (an old gift card) in the gap on the side of
+  the insert nearer the lens takes up the play.
+- Focus: at f/5.6 and 10x on the grain, at a point about a third of the way in
+  from the left edge (as seen on the camera's screen), then stop down to f/11
+  without touching the ring. The bow leaves the edges about one focus step
+  farther than the center; focusing off-center splits the error.
+- Exposure: 1/60 s at f/11 with the light freshly charged put the base at
+  about 90% of full scale. The light dims as its battery runs down, so check
+  the blank's level now and then.
+- Eight captures per negative, triggered from the phone (Panasonic Image App,
+  connected through the home network).
+
+To check a holder for tilt and bow, shoot a focus series on the dark (fogged)
+end of a leader: two frames at each of a dozen focus positions, stepped in one
+direction, exposed so the leader reaches at least 15% of full scale.
 <!-- invert-film-scans:capture:end -->
 
 ## Usage
